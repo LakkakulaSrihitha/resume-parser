@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Resume Upload Web App</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #f7f9fc;
+      padding: 40px;
+      color: #333;
+    }
+    .container {
+      max-width: 500px;
+      margin: auto;
+      background: #fff;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+    }
+    h2 {
+      text-align: center;
+      color: #4CAF50;
+    }
+    input, button {
+      width: 100%;
+      padding: 12px;
+      margin: 10px 0;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+    button {
+      background-color: #4CAF50;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+    #status {
+      text-align: center;
+      margin-top: 15px;
+      font-weight: bold;
+      color: #4CAF50;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Upload Resume</h2>
+    <input type="file" id="resume" accept=".pdf,.docx">
+    <button onclick="uploadResume()">Upload & Save</button>
+    <div id="status"></div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script>
+    const scriptURL = "https://script.google.com/macros/s/AKfycbwIjsLPd5Z2aW9SSHGJl8bm0B8MkrZxYvn0J0LHhCAgI2oC-uV0aPX-6ProohWpfQw/exec";
+
+    async function uploadResume() {
+      const file = document.getElementById("resume").files[0];
+      const status = document.getElementById("status");
+
+      if (!file) {
+        status.textContent = "❌ Please upload a file.";
+        status.style.color = "red";
+        return;
+      }
+
+      const reader = new FileReader();
+      const ext = file.name.split('.').pop().toLowerCase();
+
+      reader.onload = async function(e) {
+        try {
+          let text = "";
+          if (ext === "pdf") {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.worker.min.js';
+            const typedarray = new Uint8Array(e.target.result);
+            const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
+            for (let i = 1; i <= pdf.numPages; i++) {
+              const page = await pdf.getPage(i);
+              const content = await page.getTextContent();
+              text += content.items.map(item => item.str).join(" ") + " ";
+            }
+          } else if (ext === "docx") {
+            const zip = await JSZip.loadAsync(e.target.result);
+            const xml = await zip.file("word/document.xml").async("string");
+            text = xml.replace(/<[^>]+>/g, ' ');
+          } else {
+            status.textContent = "❌ Unsupported file type.";
+            return;
+          }
+
+          const parsed = parseResume(text);
+
+          const formData = new FormData();
+          formData.append("name", parsed.name);
+          formData.append("phone", parsed.phone);
+          formData.append("email", parsed.email);
+          formData.append("jobRole", parsed.jobRole);
+          formData.append("skills", parsed.skills);
+          formData.append("languages", parsed.languages);
+          formData.append("education", parsed.education);
+          formData.append("experience", parsed.experience);
+          formData.append("fileLink", file.name);
+
+          const response = await fetch(scriptURL, {
+            method: "POST",
+            body: formData
+          });
+
+          const result = await response.text();
+          if (result.includes("Success")) {
+            status.textContent = "✅ Resume uploaded successfully!";
+            status.style.color = "green";
+          } else {
+            throw new Error(result);
+          }
+        } catch (err) {
+          console.error(err);
+          status.textContent = "❌ Upload failed. Check console.";
+          status.style.color = "red";
+        }
+      };
+
+      reader.readAsArrayBuffer(file);
+    }
+
+    function extractNameSmart(text) {
+      const lines = text.split(/[\n\r]+/).map(line => line.trim()).filter(Boolean);
+      const emailLineIndex = lines.findIndex(line => /@/.test(line));
+      
+      if (emailLineIndex > 0) {
+        const possibleName = lines[emailLineIndex - 1];
+        if (/^[A-Z][a-z]+(\s+[A-Z][a-z]+){0,3}$/.test(possibleName)) {
+          return possibleName;
+        }
+      }
+
+      for (let i = 0; i < Math.min(lines.length, 10); i++) {
+        const words = lines[i].split(" ");
+        const capWords = words.filter(w => /^[A-Z][a-z]{2,}$/.test(w));
+        if (capWords.length >= 2 && capWords.length <= 4) {
+          return capWords.join(" ");
+        }
+      }
+
+      // fallback to first line
+      return lines[0];
+    }
+
+    function parseResume(text) {
+      const cleanList = (list) => [...new Set(list.map(s => s.toLowerCase()))]
+        .map(s => s[0].toUpperCase() + s.slice(1)).join(", ");
+
+      return {
+        name: extractNameSmart(text),
+        phone: (text.match(/(?:\+91[-\s]?|0)?[6-9]\d{9}/) || [""])[0],
+        email: (text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/) || [""])[0],
+        jobRole: (text.match(/\b(Intern|Engineer|Developer|Manager|Analyst|Consultant|Designer)\b/i) || [""])[0],
+        skills: cleanList(text.match(/\b(Python|Java|JavaScript|SQL|C\+\+|HTML|CSS|React|Node|MongoDB|Django|Flutter|Excel)\b/gi) || []),
+        languages: cleanList(text.match(/\b(English|Hindi|Telugu|Tamil|Kannada|Malayalam|Marathi|Gujarati|Bengali|French|German|Spanish)\b/gi) || []),
+        education: cleanList(text.match(/\b(Bachelor|Master|B\.?Tech|M\.?Tech|BCA|MCA|B\.?Sc|M\.?Sc|Diploma|Graduation|PG|Bachelors|BE|ME|PhD)\b/gi) || []),
+        experience: (text.match(/\b\d{1,2}\s+(years?|months?)\b/i) || ["Fresher"])[0]
+      };
+    }
+  </script>
+</body>
+</html>
